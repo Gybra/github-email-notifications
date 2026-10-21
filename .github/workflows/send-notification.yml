@@ -59,6 +59,13 @@ jobs:
       group: email-notification-${{ github.repository }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.updated_at || github.sha }}
       cancel-in-progress: false
     steps:
+      - name: Checkout notification implementation
+        uses: actions/checkout@v4
+        with:
+          repository: Gybra/github-email-notifications
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          path: notification-source
       - name: Send notification
         shell: bash
         env:
