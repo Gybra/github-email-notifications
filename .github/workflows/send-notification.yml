@@ -1,5 +1,5 @@
 # Reusable workflow: sends one HTML e-mail for a GitHub event through Brevo SMTP.
-# Callers invoke it with `uses: Gybra/github-email-notifications/.github/workflows/send-notification.yml@v1`
+# Callers invoke it with `uses: Gybra/github-email-notifications/.github/workflows/send-notification.yml@v2`
 # (see notify.yml). The implementation is checked out from the central repository.
 # Keep the source revision aligned with the reusable workflow release.
 name: Send email notification
@@ -63,9 +63,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Gybra/github-email-notifications
-          # Fetch the source files released alongside the reusable workflow.
-          # Update this ref when publishing a new v1 release.
-          ref: main
+          # Both the caller and this checkout must use the same v2 release tag.
+          # Do not publish v2 until this tag points to the merged implementation.
+          ref: v2
           persist-credentials: false
           path: notification-source
       - name: Send notification
