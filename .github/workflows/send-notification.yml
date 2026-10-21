@@ -60,7 +60,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Send notification
-        shell: python3 -I {0}
+        shell: bash
         env:
           NOTIFY_ENABLED: ${{ inputs.enabled }}
           NOTIFY_RECIPIENTS: ${{ inputs.recipients }}
