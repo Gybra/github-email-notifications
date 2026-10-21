@@ -5,10 +5,7 @@ name: Email notifications
 
 on:
   push:
-    # GitHub cannot read variables here: this is only a coarse filter that avoids runs on
-    # unrelated branches. NOTIFICATION_BRANCHES is the precise filter; if you monitor other
-    # branches there, list them here too (or use '**').
-    branches: [main, master]
+    # Trigger on all branches; the reusable workflow applies NOTIFICATION_BRANCHES\n    # (default: main,master when the variable is missing or empty).\n    branches: ['**']
   # pull_request_target runs the workflow from the default branch and gets secrets even for
   # PRs from forks. It is safe here because no code from the pull request is ever checked out.
   pull_request_target:

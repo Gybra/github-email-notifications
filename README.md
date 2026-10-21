@@ -89,7 +89,7 @@ the same path, and commit it to the **default branch**: `pull_request_target` an
 ```bash
 cd /path/to/client-repo
 mkdir -p .github/workflows
-curl -fsSL https://raw.githubusercontent.com/Gybra/github-email-notifications/v1/.github/workflows/notify.yml \
+curl -fsSL https://raw.githubusercontent.com/Gybra/github-email-notifications/main/.github/workflows/notify.yml \
   -o .github/workflows/notify.yml
 git add .github/workflows/notify.yml && git commit -m "ci: add email notifications" && git push
 ```
@@ -157,10 +157,10 @@ of recipients) and a link to the run. The test ignores `NOTIFICATION_EVENTS` and
   only merges, or `push,pr_opened,pr_merged,pr_closed` for everything.
 - **Turn everything off**: `NOTIFICATION_ENABLED=false`, or delete the variable. The job is skipped
   without starting a runner and without using minutes.
-- **Branches**: `NOTIFICATION_BRANCHES` is the precise filter and accepts globs (`release/*`).
-  GitHub does not allow variables in `on.push.branches`, so the caller also has a coarse
-  `[main, master]` filter that avoids useless runs. If you monitor other branches, add them there
-  too, or use `'**'`, which however starts a runner on every push to any branch.
+- **Branches**: the caller uses `on.push.branches: ['**']` to receive pushes on every branch.
+  The reusable workflow then filters using `NOTIFICATION_BRANCHES` (globs supported, e.g. `release/*`).
+  When the variable is missing or empty, the fallback remains `main,master`.
+  Every push starts a runner even if the central filter later skips the email; this may consume Actions minutes in private repositories.
 - **Timezone**: `Europe/Rome` by default; add `timezone: UTC` under `with:` in the caller to change it.
 
 ## 4. Security
@@ -204,11 +204,12 @@ of recipients) and a link to the run. The test ignores `NOTIFICATION_EVENTS` and
 - **No cross-repo file access**: the calling repository's `GITHUB_TOKEN` cannot read other private
   repositories. The script is embedded in the workflow, so it travels with the same version (`@v1`)
   without a checkout or extra tokens.
-- **Versioning**: callers use `@v1`. After a backward-compatible change, move the tag
+- **Versioning**: callers use `@v1`. The template installation command above reads the current `main` branch;
+  the reusable workflow still uses the `v1` tag. After a backward-compatible change, move the tag
   (`git tag -f v1 && git push -f origin v1`); for breaking changes create `v2`. If you want
   immutability, pin a commit SHA instead of the tag.
-- **Variables in triggers**: `on.push.branches` does not accept `vars`, hence the double filter
-  described above.
+- **Variables in triggers**: `on.push.branches` does not accept `vars`, so the caller listens on
+  all branches and the reusable workflow filters using `NOTIFICATION_BRANCHES`.
 - **Events created by `GITHUB_TOKEN`**: pushes or merges performed by another workflow with
   `GITHUB_TOKEN` do not start new workflows, so they produce no notifications. Merges from the UI,
   the CLI or with a PAT/GitHub App do.
