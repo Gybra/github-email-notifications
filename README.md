@@ -1,255 +1,256 @@
 # github-email-notifications
 
-Notifiche email centralizzate per le repository GitHub, inviate tramite **Brevo SMTP** da un
-**reusable workflow** di GitHub Actions.
+Centralized email notifications for GitHub repositories, sent through **Brevo SMTP** by a
+GitHub Actions **reusable workflow**.
 
-- Tutta la logica sta in [`.github/workflows/send-notification.yml`](.github/workflows/send-notification.yml).
-- Ogni repository cliente contiene solo [`.github/workflows/notify.yml`](.github/workflows/notify.yml) (circa 35 righe, identico per tutte).
-- Destinatari, eventi e branch si configurano per repository con le **Variables** di GitHub Actions; le credenziali SMTP con i **Secrets**.
-- Nessuna dipendenza: lo script usa solo la libreria standard di Python, già presente sui runner `ubuntu-latest`.
+- All the logic lives in [`.github/workflows/send-notification.yml`](.github/workflows/send-notification.yml).
+- Each client repository only contains [`.github/workflows/notify.yml`](.github/workflows/notify.yml) (about 35 lines, identical everywhere).
+- Recipients, events and branches are configured per repository with GitHub Actions **Variables**; the SMTP credentials with **Secrets**.
+- No dependencies: the script only uses the Python standard library, already available on `ubuntu-latest` runners.
 
 ```
-repo cliente (privata o pubblica)                 Gybra/github-email-notifications (pubblica)
-┌──────────────────────────────┐   workflow_call   ┌───────────────────────────────────────┐
+client repo (private or public)                   Gybra/github-email-notifications (public)
+┌──────────────────────────────┐   workflow_call   ┌─────────────────────────────────────────┐
 │ .github/workflows/notify.yml │ ────────────────▶ │ .github/workflows/send-notification.yml │ ──▶ smtp-relay.brevo.com:587
-│ vars.NOTIFICATION_*          │   inputs + 2      │  (script Python incorporato)            │     STARTTLS
-│ secrets.BREVO_SMTP_*         │   secrets         └───────────────────────────────────────┘
+│ vars.NOTIFICATION_*          │   inputs + 2      │  (embedded Python script)               │     STARTTLS
+│ secrets.BREVO_SMTP_*         │   secrets         └─────────────────────────────────────────┘
 └──────────────────────────────┘
 ```
 
-## Eventi supportati
+## Supported events
 
-| Valore in `NOTIFICATION_EVENTS` | Quando                                   | Oggetto email                                       |
-|---------------------------------|------------------------------------------|-----------------------------------------------------|
-| `push`                          | push su un branch monitorato             | `[GitHub] repo — New push on main` (o `Force push on main`, `Branch main deleted`) |
-| `pr_opened`                     | PR aperta verso un branch monitorato     | `[GitHub] repo — Pull Request #42 opened`           |
-| `pr_merged`                     | PR mergiata in un branch monitorato      | `[GitHub] repo — Pull Request #42 merged`           |
-| `pr_closed`                     | PR chiusa senza merge (opzionale)        | `[GitHub] repo — Pull Request #42 closed`           |
-| *(workflow_dispatch)*           | test manuale, ignora i filtri eventi/branch | `[GitHub] repo — Test notification`              |
+| Value in `NOTIFICATION_EVENTS` | When                                    | Email subject                                       |
+|--------------------------------|-----------------------------------------|-----------------------------------------------------|
+| `push`                         | push to a monitored branch              | `[GitHub] repo — New push on main` (or `Force push on main`, `Branch main deleted`) |
+| `pr_opened`                    | PR opened against a monitored branch    | `[GitHub] repo — Pull Request #42 opened`           |
+| `pr_merged`                    | PR merged into a monitored branch       | `[GitHub] repo — Pull Request #42 merged`           |
+| `pr_closed`                    | PR closed without merge (optional)      | `[GitHub] repo — Pull Request #42 closed`           |
+| *(workflow_dispatch)*          | manual test, ignores event/branch filters | `[GitHub] repo — Test notification`               |
 
-Default se `NOTIFICATION_EVENTS` è vuota: `push,pr_opened,pr_merged`.
+Default when `NOTIFICATION_EVENTS` is empty: `push,pr_opened,pr_merged`.
 
-Per le PR, `NOTIFICATION_BRANCHES` si applica al **branch di destinazione** (base): una PR
-`feature/x → develop` non genera email se monitori solo `main,master`.
+For PRs, `NOTIFICATION_BRANCHES` applies to the **target (base) branch**: a PR
+`feature/x → develop` sends no email if you only monitor `main,master`.
 
-### Niente doppioni al merge
+### No duplicates on merge
 
-Il merge di una PR genera due eventi: `pull_request_target` (closed, merged) e `push` sul branch
-di destinazione. Il run del push interroga l'API GitHub (`GET /repos/{repo}/commits/{sha}/pulls`):
-se il commit in testa è il `merge_commit_sha` di una PR mergiata nello stesso branch e `pr_merged`
-è attivo, la mail di push viene saltata. Funziona con merge commit, squash e rebase. Se
-`pr_merged` è disattivato, il push viene notificato normalmente. Se l'API non risponde, si
-preferisce un possibile doppione a una notifica persa.
+Merging a PR produces two events: `pull_request_target` (closed, merged) and `push` on the
+target branch. The push run queries the GitHub API (`GET /repos/{repo}/commits/{sha}/pulls`):
+if the head commit is the `merge_commit_sha` of a PR merged into the same branch and `pr_merged`
+is enabled, the push email is skipped. This works with merge commits, squash and rebase. If
+`pr_merged` is disabled, the push is notified as usual. If the API does not respond, a possible
+duplicate is preferred over a lost notification.
 
-### Contenuto delle email
+### Email content
 
-HTML responsive (layout a tabelle con stile inline, larghezza massima 600 px) più una versione
-testuale. Contiene repository, tipo di evento, branch, autore, data e ora (fuso `Europe/Rome`),
-titolo e numero della PR, messaggio dell'ultimo commit, pulsante verso PR, commit o confronto,
-e gli ultimi 10 commit. Non include body delle PR, diff né indirizzi email degli autori dei commit.
+Responsive HTML (table layout with inline styles, 600 px max width) plus a plain-text version.
+It contains repository, event type, branch, author, date and time (`Europe/Rome` timezone),
+PR title and number, latest commit message, a button linking to the PR, commit or comparison,
+and the latest 10 commits. It does not include PR bodies, diffs or commit author email addresses.
 
-## 1. Configurare Brevo (una sola volta)
+## 1. Configure Brevo (once)
 
-1. **Account**: crea un account su <https://www.brevo.com> (il piano gratuito basta).
-2. **Mittente verificato**: *Senders, Domains & Dedicated IPs → Senders → Add a sender*, inserisci
-   nome e indirizzo (es. `notifications@tuodominio.it`) e conferma il codice ricevuto via mail.
-3. **Dominio autenticato (consigliato)**: *Senders, Domains & Dedicated IPs → Domains → Add a domain*
-   e aggiungi i record DNS DKIM e DMARC indicati. Senza autenticazione le mail finiscono facilmente
-   in spam. Non usare come mittente un indirizzo `@gmail.com` o `@outlook.com`: le loro policy DMARC
-   ne impediscono l'invio da server terzi.
-4. **Credenziali SMTP**: menu account → *SMTP & API* → scheda **SMTP**.
-   - **Login**: è il valore `xxxxxx@smtp-brevo.com` mostrato lì, **non** l'email dell'account → `BREVO_SMTP_LOGIN`.
-   - **Generate a new SMTP key**: copia subito la chiave (`xsmtpsib-...`) → `BREVO_SMTP_KEY`.
-     Serve una **SMTP key**, non una API key (`xkeysib-...`).
+1. **Account**: create an account at <https://www.brevo.com> (the free plan is enough).
+2. **Verified sender**: *Senders, Domains & Dedicated IPs → Senders → Add a sender*, enter a name
+   and address (e.g. `notifications@yourdomain.com`) and confirm the code you receive by email.
+3. **Authenticated domain (recommended)**: *Senders, Domains & Dedicated IPs → Domains → Add a domain*
+   and add the DKIM and DMARC DNS records shown. Without authentication, emails easily end up in
+   spam. Do not use a `@gmail.com` or `@outlook.com` address as sender: their DMARC policies block
+   sending from third-party servers.
+4. **SMTP credentials**: account menu → *SMTP & API* → **SMTP** tab.
+   - **Login**: the `xxxxxx@smtp-brevo.com` value shown there, **not** your account email → `BREVO_SMTP_LOGIN`.
+   - **Generate a new SMTP key**: copy the key (`xsmtpsib-...`) right away → `BREVO_SMTP_KEY`.
+     You need an **SMTP key**, not an API key (`xkeysib-...`).
 
-Parametri usati (fissi nel workflow): host `smtp-relay.brevo.com`, porta `587`, STARTTLS con
-verifica del certificato, autenticazione LOGIN.
+Parameters used (fixed in the workflow): host `smtp-relay.brevo.com`, port `587`, STARTTLS with
+certificate verification, LOGIN authentication.
 
-### Quota Brevo (piano gratuito: 300 email/giorno)
+### Brevo quota (free plan: 300 emails/day)
 
-Brevo conta **ogni destinatario** come una email: una notifica a 4 destinatari consuma 4 email.
+Brevo counts **each recipient** as one email: a notification to 4 recipients uses 4 emails.
 
 ```
-email al giorno ≈ (push + PR aperte + PR mergiate + …) × numero di destinatari, sommato su tutte le repo
+emails per day ≈ (pushes + PRs opened + PRs merged + …) × number of recipients, summed over all repos
 ```
 
-Esempio: 10 repo con 5 eventi al giorno ciascuna e 3 destinatari → 150 email al giorno. La quota è
-condivisa da tutto l'account Brevo, quindi anche da altri usi. Il workflow rifiuta più di 50
-destinatari per singola mail. Quando la quota è esaurita Brevo risponde con un errore SMTP e il job
-fallisce; l'errore resta visibile nei log.
+Example: 10 repos with 5 events a day each and 3 recipients → 150 emails a day. The quota is
+shared by the whole Brevo account, including any other use. The workflow refuses more than 50
+recipients per email. Once the quota is exhausted Brevo replies with an SMTP error and the job
+fails; the error stays visible in the logs.
 
-## 2. Collegare una repository cliente
+## 2. Connect a client repository
 
 ### 2.1 Caller workflow
 
-Copia [`.github/workflows/notify.yml`](.github/workflows/notify.yml) nella repository cliente,
-nello stesso percorso, e fai commit sul **default branch**: `pull_request_target` e
-`workflow_dispatch` usano sempre la versione del default branch.
+Copy [`.github/workflows/notify.yml`](.github/workflows/notify.yml) into the client repository at
+the same path, and commit it to the **default branch**: `pull_request_target` and
+`workflow_dispatch` always use the default-branch version.
 
 ```bash
-cd /percorso/repo-cliente
+cd /path/to/client-repo
 mkdir -p .github/workflows
 curl -fsSL https://raw.githubusercontent.com/Gybra/github-email-notifications/v1/.github/workflows/notify.yml \
   -o .github/workflows/notify.yml
 git add .github/workflows/notify.yml && git commit -m "ci: add email notifications" && git push
 ```
 
-### 2.2 Secrets e Variables
+### 2.2 Secrets and Variables
 
 *Settings → Secrets and variables → Actions*:
 
-| Tipo     | Nome                    | Obbligatorio | Esempio / default                                     |
-|----------|-------------------------|--------------|-------------------------------------------------------|
-| Secret   | `BREVO_SMTP_LOGIN`      | sì           | `123abc001@smtp-brevo.com`                            |
-| Secret   | `BREVO_SMTP_KEY`        | sì           | `xsmtpsib-…`                                          |
-| Variable | `NOTIFICATION_ENABLED`  | sì           | `true` (qualsiasi altro valore = spento)              |
-| Variable | `NOTIFICATION_EMAILS`   | sì           | `dev@acme.it,pm@acme.it`                              |
-| Variable | `NOTIFICATION_FROM`     | sì           | `GitHub Notifications <notifications@acme.it>`        |
-| Variable | `NOTIFICATION_BRANCHES` | no           | default `main,master`; ammessi glob, es. `main,release/*` |
-| Variable | `NOTIFICATION_EVENTS`   | no           | default `push,pr_opened,pr_merged`                    |
+| Type     | Name                    | Required | Example / default                                     |
+|----------|-------------------------|----------|-------------------------------------------------------|
+| Secret   | `BREVO_SMTP_LOGIN`      | yes      | `123abc001@smtp-brevo.com`                            |
+| Secret   | `BREVO_SMTP_KEY`        | yes      | `xsmtpsib-…`                                          |
+| Variable | `NOTIFICATION_ENABLED`  | yes      | `true` (any other value = off)                        |
+| Variable | `NOTIFICATION_EMAILS`   | yes      | `dev@acme.com,pm@acme.com`                            |
+| Variable | `NOTIFICATION_FROM`     | yes      | `GitHub Notifications <notifications@acme.com>`       |
+| Variable | `NOTIFICATION_BRANCHES` | no       | default `main,master`; globs allowed, e.g. `main,release/*` |
+| Variable | `NOTIFICATION_EVENTS`   | no       | default `push,pr_opened,pr_merged`                    |
 
-Le stesse impostazioni via CLI:
+The same settings via CLI:
 
 ```bash
-REPO=HexLab-Software/nome-repo
-gh secret set BREVO_SMTP_LOGIN --repo "$REPO"        # incolla il valore quando richiesto
+REPO=HexLab-Software/repo-name
+gh secret set BREVO_SMTP_LOGIN --repo "$REPO"        # paste the value when prompted
 gh secret set BREVO_SMTP_KEY   --repo "$REPO"
 gh variable set NOTIFICATION_ENABLED --repo "$REPO" --body "true"
-gh variable set NOTIFICATION_EMAILS  --repo "$REPO" --body "dev@acme.it,pm@acme.it"
-gh variable set NOTIFICATION_FROM    --repo "$REPO" --body "GitHub Notifications <notifications@acme.it>"
-# opzionali
+gh variable set NOTIFICATION_EMAILS  --repo "$REPO" --body "dev@acme.com,pm@acme.com"
+gh variable set NOTIFICATION_FROM    --repo "$REPO" --body "GitHub Notifications <notifications@acme.com>"
+# optional
 gh variable set NOTIFICATION_BRANCHES --repo "$REPO" --body "main,master"
 gh variable set NOTIFICATION_EVENTS   --repo "$REPO" --body "push,pr_opened,pr_merged,pr_closed"
 ```
 
-Vedi anche [`.env.example`](.env.example), solo documentazione: nessun file `.env` viene letto.
+See also [`.env.example`](.env.example), documentation only: no `.env` file is ever read.
 
-**Secrets di organizzazione**: su un piano a pagamento puoi creare `BREVO_SMTP_LOGIN` e
-`BREVO_SMTP_KEY` una sola volta (*Organization → Settings → Secrets and variables → Actions*)
-e assegnarli alle repo. **Sul piano GitHub Free (come HexLab-Software oggi) secrets e variables
-di organizzazione non sono disponibili per le repository private**: in quel caso vanno impostati
-per singola repository. Il caller non cambia, perché i secrets di repository hanno la precedenza
-su quelli di organizzazione con lo stesso nome.
+**Organization secrets**: on a paid plan you can create `BREVO_SMTP_LOGIN` and `BREVO_SMTP_KEY`
+once (*Organization → Settings → Secrets and variables → Actions*) and assign them to repositories.
+**On the GitHub Free plan (as HexLab-Software is today) organization secrets and variables are not
+available to private repositories**: in that case set them per repository. The caller does not
+change, because repository secrets take precedence over organization secrets with the same name.
 
-### 2.3 Policy Actions dell'organizzazione
+### 2.3 Organization Actions policy
 
-Se la repo cliente sta in un'organizzazione con policy restrittiva sulle actions, in
-*Organization → Settings → Actions → General → Policies* scegli "Allow all actions and reusable
-workflows", oppure aggiungi all'allowlist:
+If the client repository belongs to an organization with a restrictive actions policy, go to
+*Organization → Settings → Actions → General → Policies* and choose "Allow all actions and reusable
+workflows", or add to the allowlist:
 
 ```
 Gybra/github-email-notifications/.github/workflows/send-notification.yml@*
 ```
 
-### 2.4 Test manuale
+### 2.4 Manual test
 
-*Actions → Email notifications → Run workflow* (oppure `gh workflow run notify.yml --repo "$REPO"`).
-Arriva una mail "Test notification" con la configurazione attiva (eventi, branch, numero di
-destinatari) e il link al run. Il test ignora `NOTIFICATION_EVENTS` e `NOTIFICATION_BRANCHES`,
-ma rispetta `NOTIFICATION_ENABLED`.
+*Actions → Email notifications → Run workflow* (or `gh workflow run notify.yml --repo "$REPO"`).
+You receive a "Test notification" email with the active configuration (events, branches, number
+of recipients) and a link to the run. The test ignores `NOTIFICATION_EVENTS` and
+`NOTIFICATION_BRANCHES`, but respects `NOTIFICATION_ENABLED`.
 
-## 3. Configurazione per repository
+## 3. Per-repository configuration
 
-- **Destinatari diversi per repo**: ogni repo ha la propria `NOTIFICATION_EMAILS`. Separatori ammessi:
-  virgola, punto e virgola, spazi o a capo. I duplicati (anche con maiuscole diverse) vengono
-  rimossi; gli indirizzi malformati vengono scartati con un warning, e se non ne resta nessuno il
-  job fallisce. Tutti i destinatari compaiono nel campo `To` della stessa mail.
-- **Attivare o disattivare singoli eventi**: modifica `NOTIFICATION_EVENTS`, per esempio `pr_merged`
-  per ricevere solo i merge, o `push,pr_opened,pr_merged,pr_closed` per tutto.
-- **Spegnere tutto**: `NOTIFICATION_ENABLED=false`, oppure cancella la variabile. Il job viene
-  saltato senza avviare un runner e senza consumare minuti.
-- **Branch**: `NOTIFICATION_BRANCHES` è il filtro preciso e accetta glob (`release/*`). GitHub però
-  non permette di usare variabili in `on.push.branches`, quindi il caller ha anche un filtro
-  grossolano `[main, master]` che evita run inutili. Se monitori altri branch, aggiungili anche lì,
-  oppure usa `'**'`, che però avvia un runner a ogni push su qualsiasi branch.
-- **Fuso orario**: `Europe/Rome` di default; nel caller aggiungi `timezone: UTC` sotto `with:` per cambiarlo.
+- **Different recipients per repo**: each repo has its own `NOTIFICATION_EMAILS`. Allowed
+  separators: comma, semicolon, spaces or newlines. Duplicates (including case differences) are
+  removed; malformed addresses are dropped with a warning, and if none is left the job fails. All
+  recipients appear in the `To` field of the same email.
+- **Enable or disable single events**: edit `NOTIFICATION_EVENTS`, for example `pr_merged` to get
+  only merges, or `push,pr_opened,pr_merged,pr_closed` for everything.
+- **Turn everything off**: `NOTIFICATION_ENABLED=false`, or delete the variable. The job is skipped
+  without starting a runner and without using minutes.
+- **Branches**: `NOTIFICATION_BRANCHES` is the precise filter and accepts globs (`release/*`).
+  GitHub does not allow variables in `on.push.branches`, so the caller also has a coarse
+  `[main, master]` filter that avoids useless runs. If you monitor other branches, add them there
+  too, or use `'**'`, which however starts a runner on every push to any branch.
+- **Timezone**: `Europe/Rome` by default; add `timezone: UTC` under `with:` in the caller to change it.
 
-## 4. Sicurezza
+## 4. Security
 
-- **Credenziali**: solo nei GitHub Secrets e passate esplicitamente (`smtp_login`, `smtp_key`),
-  senza `secrets: inherit`. GitHub le maschera nei log; lo script non le stampa mai e gli errori SMTP
-  mostrano solo codice e messaggio del server.
-- **Workflow injection**: nessun dato dell'evento viene interpolato con `${{ }}` dentro uno script.
-  Il payload viene letto come JSON da `GITHUB_EVENT_PATH` e gli input arrivano come variabili
-  d'ambiente. Un test verifica che lo script incorporato non contenga espressioni `${{`. I messaggi di
-  log vengono escapati per impedire l'iniezione di workflow commands (`::...::`).
-- **HTML/header injection**: tutto ciò che arriva dall'evento (titoli PR, messaggi di commit, nomi di
-  branch) viene escapato con `html.escape`. Oggetto e header sono su una sola riga, senza caratteri di
-  controllo. I link vengono mostrati solo se puntano al server GitHub.
-- **PR da fork**: il caller usa `pull_request_target`, che ha accesso ai secrets ed esegue sempre la
-  versione del workflow presente nel default branch. È sicuro perché **nessun codice della PR viene
-  mai fatto checkout o eseguito**: il workflow non usa `actions/checkout`. Non aggiungere step che
-  facciano checkout della PR in questo workflow.
-- **Permessi minimi**: `contents: read` e `pull-requests: read`, usati solo per la deduplica dei merge
-  e per l'elenco dei commit della PR.
-- **Affidabilità**: timeout del job di 5 minuti e timeout SMTP di 30 secondi. Gli errori temporanei
-  (4xx, disconnessioni, errori di rete) vengono ritentati al massimo 3 volte (attese di 10 e 30
-  secondi). Gli errori permanenti (autenticazione 535, mittente rifiutato, 5xx) falliscono subito.
-  Un errore sul `QUIT` dopo un invio riuscito non provoca un nuovo invio.
-- **Concurrency**: un gruppo per evento distinto (repo + evento + PR/ref + `updated_at`/sha). Le
-  riconsegne dello stesso evento vengono serializzate, mentre push o PR diversi non si annullano mai
-  a vicenda (`cancel-in-progress: false`).
-- **Repo pubblica**: questa repository è pubblica, quindi non deve contenere nessun dato sensibile;
-  destinatari e credenziali stanno solo nelle repo clienti. Anche i log dei run di questa repo sono
-  pubblici, per questo lo script non stampa mai gli indirizzi email. Il `notify.yml` qui presente
-  resta inattivo finché non imposti `NOTIFICATION_ENABLED=true` in questa repo. Se lo attivi,
-  chiunque apra una PR può far partire una mail.
+- **Credentials**: only in GitHub Secrets and passed explicitly (`smtp_login`, `smtp_key`), without
+  `secrets: inherit`. GitHub masks them in logs; the script never prints them and SMTP errors only
+  show the server's code and message.
+- **Workflow injection**: no event data is interpolated with `${{ }}` inside a script. The payload
+  is read as JSON from `GITHUB_EVENT_PATH` and inputs arrive as environment variables. A test checks
+  that the embedded script contains no `${{` expressions. Log messages are escaped to prevent
+  workflow command injection (`::...::`).
+- **HTML/header injection**: everything that comes from the event (PR titles, commit messages,
+  branch names) is escaped with `html.escape`. Subject and headers are single-line, without control
+  characters. Links are only rendered when they point to the GitHub server.
+- **PRs from forks**: the caller uses `pull_request_target`, which has access to secrets and always
+  runs the workflow version on the default branch. This is safe because **no code from the PR is
+  ever checked out or executed**: the workflow does not use `actions/checkout`. Do not add steps
+  that check out the PR in this workflow.
+- **Least privilege**: `contents: read` and `pull-requests: read`, used only for merge
+  de-duplication and for the PR commit list.
+- **Reliability**: 5-minute job timeout and 30-second SMTP timeout. Temporary errors (4xx,
+  disconnections, network errors) are retried at most 3 times (waits of 10 and 30 seconds).
+  Permanent errors (535 authentication, sender refused, 5xx) fail immediately. An error on `QUIT`
+  after a successful send never triggers a resend.
+- **Concurrency**: one group per distinct event (repo + event + PR/ref + `updated_at`/sha).
+  Re-deliveries of the same event are serialized, while different pushes or PRs never cancel each
+  other (`cancel-in-progress: false`).
+- **Public repository**: this repository is public, so it must not contain any sensitive data;
+  recipients and credentials live only in client repositories. The run logs of this repository are
+  public too, which is why the script never prints email addresses. The `notify.yml` here stays
+  inactive until you set `NOTIFICATION_ENABLED=true` in this repository. If you enable it, anyone
+  opening a PR can trigger an email.
 
-## 5. Limitazioni di GitHub Actions da conoscere
+## 5. GitHub Actions limitations to know
 
-- **Reusable workflow e repo private**: un workflow in una repo **privata** è chiamabile solo da repo
-  dello stesso owner, dopo averlo abilitato in *Settings → Actions → General → Access*. Per questo
-  la repo centrale è **pubblica**: così può essere chiamata da qualsiasi repo, sia di `Gybra` sia di
-  `HexLab-Software`, private incluse. Il run avviene nel contesto della repo chiamante, con i suoi
-  secrets e i suoi minuti.
-- **Niente accesso cross-repo ai file**: il `GITHUB_TOKEN` della repo chiamante non può leggere altre
-  repo private. Lo script è incorporato nel workflow, così viaggia con la stessa versione (`@v1`)
-  senza checkout né token aggiuntivi.
-- **Versioning**: i caller usano `@v1`. Dopo una modifica compatibile sposta il tag
-  (`git tag -f v1 && git push -f origin v1`); per modifiche incompatibili crea `v2`. Chi vuole
-  l'immutabilità può fissare uno SHA di commit al posto del tag.
-- **Variabili nei trigger**: `on.push.branches` non accetta `vars`, da qui il doppio filtro descritto sopra.
-- **Eventi generati da `GITHUB_TOKEN`**: push o merge eseguiti da un altro workflow con `GITHUB_TOKEN`
-  non avviano nuovi workflow, quindi non generano notifiche. I merge da UI, CLI o con PAT/GitHub App invece sì.
-- **Dependabot**: i run avviati da Dependabot non ricevono i secrets di Actions. Se servono notifiche
-  sulle sue PR, crea `BREVO_SMTP_LOGIN` e `BREVO_SMTP_KEY` anche come *Dependabot secrets*.
-- **Minuti Actions**: sulle repo private ogni job viene arrotondato al minuto (il piano Free include
-  2000 minuti al mese); sulle repo pubbliche i minuti sono gratuiti. I job saltati dall'`if` non
-  consumano minuti. Ogni push su un branch monitorato e ogni apertura o chiusura di PR consuma circa
-  1 minuto, anche quando lo script decide di non inviare (evento disattivato o merge già notificato).
-- **Commit elencati**: nella mail compaiono al massimo gli ultimi 10 commit. Per le PR vengono letti i
-  primi 100 commit tramite API.
+- **Reusable workflows and private repos**: a workflow in a **private** repository can only be
+  called by repositories of the same owner, after enabling it in *Settings → Actions → General →
+  Access*. That is why the central repository is **public**: it can be called by any repository,
+  of both `Gybra` and `HexLab-Software`, private ones included. The run happens in the context of
+  the calling repository, with its secrets and its minutes.
+- **No cross-repo file access**: the calling repository's `GITHUB_TOKEN` cannot read other private
+  repositories. The script is embedded in the workflow, so it travels with the same version (`@v1`)
+  without a checkout or extra tokens.
+- **Versioning**: callers use `@v1`. After a backward-compatible change, move the tag
+  (`git tag -f v1 && git push -f origin v1`); for breaking changes create `v2`. If you want
+  immutability, pin a commit SHA instead of the tag.
+- **Variables in triggers**: `on.push.branches` does not accept `vars`, hence the double filter
+  described above.
+- **Events created by `GITHUB_TOKEN`**: pushes or merges performed by another workflow with
+  `GITHUB_TOKEN` do not start new workflows, so they produce no notifications. Merges from the UI,
+  the CLI or with a PAT/GitHub App do.
+- **Dependabot**: runs started by Dependabot do not receive Actions secrets. If you need
+  notifications on its PRs, also create `BREVO_SMTP_LOGIN` and `BREVO_SMTP_KEY` as *Dependabot secrets*.
+- **Actions minutes**: on private repositories each job is rounded up to the minute (the Free plan
+  includes 2000 minutes a month); on public repositories minutes are free. Jobs skipped by the `if`
+  use no minutes. Every push to a monitored branch and every PR opened or closed uses about 1
+  minute, even when the script decides not to send (event disabled or merge already notified).
+- **Listed commits**: the email shows at most the latest 10 commits. For PRs, the first 100 commits
+  are read through the API.
 
-## 6. Diagnostica
+## 6. Troubleshooting
 
-Apri il run in *Actions → Email notifications → job "notify / Send email"*. Lo script scrive
-annotazioni `notice`, `warning` ed `error` esplicite.
+Open the run in *Actions → Email notifications → job "notify / Send email"*. The script writes
+explicit `notice`, `warning` and `error` annotations.
 
-| Sintomo | Causa probabile e soluzione |
+| Symptom | Likely cause and fix |
 |---|---|
-| Job **skipped** | `NOTIFICATION_ENABLED` non è `true`. |
-| Nessun run al push | Il branch non è in `on.push.branches` del caller, oppure il caller non è sul branch su cui hai fatto push. |
-| Nessun run per le PR | `notify.yml` non è sul **default branch** (`pull_request_target` legge solo quello). |
-| `Secret smtp_login is required, but not provided` | Il caller non passa i secrets, oppure li passa con nomi diversi. |
-| `SMTP credentials are empty` | `BREVO_SMTP_LOGIN` o `BREVO_SMTP_KEY` non esistono nella repo (Free plan: niente secrets di org per le repo private), oppure il run è di Dependabot. |
-| `authentication failed (535 …)` | Login sbagliato (serve quello `@smtp-brevo.com`), chiave revocata o API key al posto della SMTP key. Rigenera la SMTP key. |
-| `sender refused (…)` | `NOTIFICATION_FROM` non è un mittente verificato su Brevo. |
-| `server rejected the message (5xx …)` | Quota giornaliera esaurita, account Brevo sospeso o in revisione: controlla la dashboard di Brevo. |
-| `temporary SMTP failure persisted after 3 attempts` | Brevo o la rete non disponibili; rilancia il job con *Re-run*. |
-| `cannot connect to smtp-relay.brevo.com:587` | Su runner self-hosted, porta 587 in uscita bloccata dal firewall. |
-| `GitHub API returned HTTP 403` | Il caller ha ridotto i `permissions`: servono `contents: read` e `pull-requests: read`. Senza, la deduplica dei merge e l'elenco dei commit PR vengono saltati. |
-| `NOTIFICATION_EMAILS is empty or has no valid address` | Variabile mancante o con indirizzi malformati. |
-| Workflow non consentito / `not allowed to be used` | Policy Actions dell'organizzazione: vedi §2.3. |
-| Mail in spam | Autentica il dominio del mittente su Brevo (DKIM e DMARC). |
+| Job **skipped** | `NOTIFICATION_ENABLED` is not `true`. |
+| No run on push | The branch is not in the caller's `on.push.branches`, or the caller is not on the branch you pushed to. |
+| No run for PRs | `notify.yml` is not on the **default branch** (`pull_request_target` only reads that one). |
+| `Secret smtp_login is required, but not provided` | The caller does not pass the secrets, or passes them with different names. |
+| `SMTP credentials are empty` | `BREVO_SMTP_LOGIN` or `BREVO_SMTP_KEY` do not exist in the repo (Free plan: no org secrets for private repos), or the run was started by Dependabot. |
+| `authentication failed (535 …)` | Wrong login (you need the `@smtp-brevo.com` one), revoked key, or an API key instead of an SMTP key. Regenerate the SMTP key. |
+| `sender refused (…)` | `NOTIFICATION_FROM` is not a verified sender in Brevo. |
+| `server rejected the message (5xx …)` | Daily quota exhausted, Brevo account suspended or under review: check the Brevo dashboard. |
+| `temporary SMTP failure persisted after 3 attempts` | Brevo or the network is unavailable; run the job again with *Re-run*. |
+| `cannot connect to smtp-relay.brevo.com:587` | On self-hosted runners, outbound port 587 is blocked by the firewall. |
+| `GitHub API returned HTTP 403` | The caller reduced `permissions`: `contents: read` and `pull-requests: read` are needed. Without them, merge de-duplication and the PR commit list are skipped. |
+| `NOTIFICATION_EMAILS is empty or has no valid address` | Variable missing or with malformed addresses. |
+| Workflow not allowed / `not allowed to be used` | Organization Actions policy: see §2.3. |
+| Emails in spam | Authenticate the sender domain in Brevo (DKIM and DMARC). |
 
-## 7. Sviluppo
+## 7. Development
 
 ```bash
-python3 -m unittest discover -s tests -v                           # test (solo libreria standard)
-mkdir -p /tmp/previews && PREVIEW_DIR=/tmp/previews python3 -m unittest discover -s tests   # salva le email HTML renderizzate
-docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest  # lint dei workflow
+python3 -m unittest discover -s tests -v                           # tests (standard library only)
+mkdir -p /tmp/previews && PREVIEW_DIR=/tmp/previews python3 -m unittest discover -s tests   # save the rendered HTML emails
+docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:latest  # lint the workflows
 ```
 
-I test estraggono lo script dal blocco `run:` di `send-notification.yml`, quindi verificano
-esattamente il codice che gira in CI: parsing della configurazione, filtri, deduplica dei merge,
-escaping, retry e gestione degli errori SMTP, con un server SMTP finto. Nessun test invia mail vere.
+The tests extract the script from the `run:` block of `send-notification.yml`, so they check
+exactly the code that runs in CI: configuration parsing, filters, merge de-duplication, escaping,
+retries and SMTP error handling, against a fake SMTP server. No test sends real emails.
