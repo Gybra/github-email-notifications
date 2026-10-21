@@ -18,24 +18,11 @@ SHA = "a" * 40
 SERVER = "https://github.com"
 
 
-def load_script() -> types.ModuleType:
-    """Extract the `run: |` block of the workflow and load it as a module."""
-    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip() == "run: |")
-    indent = len(lines[start]) - len(lines[start].lstrip())
-    body = []
-    for line in lines[start + 1 :]:
-        if line.strip() and len(line) - len(line.lstrip()) <= indent:
-            break
-        body.append(line)
-    source = textwrap.dedent("\n".join(body))
-    assert "${{" not in source, "expressions inside the script would allow workflow injection"
-    module = types.ModuleType("send_notification")
-    exec(compile(source, str(WORKFLOW), "exec"), module.__dict__)
-    return module
-
-
-notify = load_script()
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+import notify
+import notification_github
+import notification_templates
 
 
 class FakeSMTP:
@@ -131,9 +118,10 @@ class NotificationTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.api_calls = []
         self.api_responses = {}
-        api = mock.patch.object(notify, "github_get", self.fake_github_get)
-        api.start()
-        self.addCleanup(api.stop)
+        for module in (notification_github, notification_templates):
+            api = mock.patch.object(module, "github_get", self.fake_github_get)
+            api.start()
+            self.addCleanup(api.stop)
 
     def fake_github_get(self, url, token):
         self.api_calls.append(url)
