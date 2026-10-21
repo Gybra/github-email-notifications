@@ -1,0 +1,35 @@
+# Caller workflow: copy this file as-is into .github/workflows/notify.yml of every repository
+# that should send e-mail notifications. All logic lives in the reusable workflow; per-repository
+# configuration lives in Settings → Secrets and variables → Actions (see README).
+name: Email notifications
+
+on:
+  push:
+    # GitHub cannot read variables here: this is only a coarse filter that avoids runs on
+    # unrelated branches. NOTIFICATION_BRANCHES is the precise filter; if you monitor other
+    # branches there, list them here too (or use '**').
+    branches: [main, master]
+  # pull_request_target runs the workflow from the default branch and gets secrets even for
+  # PRs from forks. It is safe here because no code from the pull request is ever checked out.
+  pull_request_target:
+    types: [opened, closed]
+  workflow_dispatch: # manual test e-mail: Actions → Email notifications → Run workflow
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    # Skipped (no runner started, no minutes used) unless the repository opts in.
+    if: vars.NOTIFICATION_ENABLED == 'true'
+    uses: Gybra/github-email-notifications/.github/workflows/send-notification.yml@v1
+    with:
+      enabled: ${{ vars.NOTIFICATION_ENABLED }}
+      recipients: ${{ vars.NOTIFICATION_EMAILS }}
+      from: ${{ vars.NOTIFICATION_FROM }}
+      branches: ${{ vars.NOTIFICATION_BRANCHES }}
+      events: ${{ vars.NOTIFICATION_EVENTS }}
+    secrets:
+      smtp_login: ${{ secrets.BREVO_SMTP_LOGIN }}
+      smtp_key: ${{ secrets.BREVO_SMTP_KEY }}
